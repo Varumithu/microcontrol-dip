@@ -44,6 +44,12 @@ SOFTWARE.
 */
 
 
+void SysTick_Handler() {
+//TODO
+}
+
+
+
 //PC13 - SD CD
 //PC3 -  SD CS
 //
@@ -51,45 +57,121 @@ SOFTWARE.
 //PB14 - MISO
 //PB15 - MOSI
 
-
+// If i understand correctly, PB12 would be slave select for the board if it was a slave, but it is used for other stuff
 void SPI2_IRQHandler(void) {
 //TODO
 
 }
-
+// Most significant bit must be first
 void init_sd_spi() {
 
 
 	RCC->AHBENR |= RCC_AHBENR_GPIOBEN | RCC_AHBENR_GPIOAEN;
 
 
-	GPIOB->MODER |= GPIO_MODER_MODER15_1 | GPIO_MODER_MODER13_1 | GPIO_MODER_MODER14_1 | GPIO_MODER_MODER12_1;
+	GPIOB->MODER |= GPIO_MODER_MODER15_1 | GPIO_MODER_MODER13_1 | GPIO_MODER_MODER14_1;
 
+	GPIOC->MODER |= GPIO_MODER_MODER3_0 | GPIO_MODER_MODER6_0; // slave select and a light
 
 	RCC->APB1ENR |= RCC_APB1ENR_SPI2EN;
 
-	GPIOB->AFR[1] |= (0 << 4 * (15 - 8)) | (0 << 4 * (13 - 8)) | (0 << 4 * (14 - 8)) | (0 << 4 * (12 - 8)); // AF 1 for 12, 13, 14, 15
+
+	SysTick->LOAD = 8000000 / 1000 - 1;
+	SysTick->VAL = 8000000 / 1000 - 1;
+	SysTick->CTRL |= SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_ENABLE_Msk | SysTick_CTRL_TICKINT_Msk;
+
+	GPIOB->AFR[1] |= (0 << 4 * (15 - 8)) | (0 << 4 * (13 - 8)) | (0 << 4 * (14 - 8)); // AF 1 for 13, 14, 15. 12 is not needed afaik
 
 
-	SPI2->CR1 |= SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_BR | SPI_CR1_MSTR | SPI_CR1_CPOL | SPI_CR1_CPHA;
-	SPI2->CR2 |= SPI_CR2_DS | SPI_CR2_RXNEIE; // 1111 - 16bit data size
 
+//	SPI2->CR1 |= SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_BR | SPI_CR1_MSTR | SPI_CR1_CPOL | SPI_CR1_CPHA;
+//	SPI2->CR2 |= SPI_CR2_DS | SPI_CR2_RXNEIE; // 1111 - 16bit data size
+
+	SPI2->CR1 |= SPI_CR1_BR_2 | SPI_CR1_MSTR;
+			// Baud rate f/32 ~ 400 kHz
+			// clock phase and polarity 0 0;
+	SPI2->CR2 |= SPI_CR2_FRXTH | SPI_CR2_DS_0 | SPI_CR2_DS_1 | SPI_CR2_DS_2;
+				//8-bit FIFO
 	SPI2->CR1 |= SPI_CR1_SPE;
-	NVIC_EnableIRQ (SPI2_IRQn);
+//	NVIC_EnableIRQ (SPI2_IRQn);
 
 }
 
+//Send a dummy byte.
+//Then send the following 6-byte command continuously
+//First byte: 0x40
+//Next four bytes: 0x00000000
+//CRC byte: 0x95
+void SPI_SD_CMD0() {
+	while(1) {
+		if ((SPI2->SR & SPI_SR_TXE) == SPI_SR_TXE) {
+			SPI2->DR = 0xFF;
+			break;
+		}
+	}
+	while (1) {
+		if ((SPI2->SR & SPI_SR_TXE) == SPI_SR_TXE) {
+			SPI2->DR = 0x40;
+			break;
+		}
+	}
+	uint8_t i = 0;
+	while (i < 4) {
+		if ((SPI2->SR & SPI_SR_TXE) == SPI_SR_TXE) {
+			SPI2->DR = 0x00;
+			++i;
+		}
+	}
+	while (1) {
+		if ((SPI2->SR & SPI_SR_TXE) == SPI_SR_TXE) {
+			SPI2->DR = 0x95;
+			break;
+		}
+	}
+
+
+}
 
 int main(void) {
-	uint32_t i = 0;
 
-	/* TODO - Add your application code here */
+	init_sd_spi();
 
-	/* Infinite loop */
-	while (1)
-	{
-	i++;
+
+	GPIOC->BSRR = GPIO_BSRR_BS_3; // slave select high
+
+	for(uint8_t i = 0; i < 100; ++i) {
+		//wait a bit just in case
 	}
+	//GPIOC->BSRR = GPIO_BSRR_BR_3; // drive slave select from high to low
+	uint8_t i = 0;
+	uint8_t junk = 0;
+	while(i < 11) {
+		if ((SPI2->SR & SPI_SR_TXE) == SPI_SR_TXE) {
+			SPI2->DR = 0xFF; // so we send around 11 dummy bytes i guess1;
+			++i;
+		}
+		if ((SPI2->SR & SPI_SR_RXNE) == SPI_SR_RXNE) {
+			junk = SPI2->DR;
+		}
+	}
+	GPIOC->BSRR = GPIO_BSRR_BR_3;
+	SPI_SD_CMD0();
+	uint8_t message = 0;
+	while (1) {
+		if ((SPI2->SR & SPI_SR_RXNE) == SPI_SR_RXNE) {
+			message = SPI2->DR;
+			if (message == 0x01) {
+				GPIOC->ODR |= GPIO_ODR_6;
+			}
+			break;
+		}
+	}
+
+	while (1) {
+		++i; // idle loop
+	}
+
+
 }
 
 
